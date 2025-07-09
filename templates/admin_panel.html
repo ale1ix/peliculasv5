@@ -81,6 +81,7 @@
                             {% if s.status != 'finished' %}
                                 <a href="{{ url_for('vestibulo', session_id=s.id) }}" target="_blank" class="btn btn-secondary btn-small">Vestíbulo</a>
                                 <a href="{{ url_for('watch_room', session_id=s.id) }}" target="_blank" class="btn btn-small">Cabina</a>
+                                <button class="btn btn-info btn-small manage-moderation-btn" data-session-id="{{ s.id }}">Moderar</button>
                             {% endif %}
                             <form action="{{ url_for('delete_session', session_id=s.id) }}" method="post" onsubmit="return confirm('¿Borrar esta sesión?');" style="margin:0;">
                                 <button type="submit" class="btn btn-danger btn-small">Borrar</button>
@@ -101,6 +102,121 @@
 <script>
     const socket = io();
     // Recargar el panel de admin si hay cambios en las sesiones
-    socket.on('admin_panel_update', () => location.reload());
+    const socket = io(); // Ya está definido globalmente si chat_logic.js se carga antes o se define aquí
+
+    socket.on('admin_panel_update', () => {
+        // Podríamos hacer una recarga más inteligente, pero por ahora reload es simple.
+        location.reload();
+    });
+
+    function setupAdminModerationTools() {
+        document.querySelectorAll('.manage-moderation-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const sessionId = this.dataset.sessionId;
+                openModerationModal(sessionId);
+            });
+        });
+    }
+
+    function openModerationModal(sessionId) {
+        // Crear o obtener el modal
+        let modal = document.getElementById('moderation-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'moderation-modal';
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background-color: rgba(0,0,0,0.7); display: flex;
+                justify-content: center; align-items: center; z-index: 1050;
+            `;
+            const modalContent = document.createElement('div');
+            modalContent.style.cssText = `
+                background-color: var(--bg-dark); color: var(--text-primary); padding: 30px;
+                border-radius: 8px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;
+            `;
+            modalContent.innerHTML = `
+                <h2 style="margin-top:0;">Moderar Sesión <span id="modal-session-id"></span></h2>
+                <div style="display:flex; gap: 20px;">
+                    <div style="flex:1;">
+                        <h4>Usuarios Silenciados</h4>
+                        <ul id="muted-users-list" style="list-style:none; padding:0;"></ul>
+                    </div>
+                    <div style="flex:1;">
+                        <h4>Usuarios Baneados</h4>
+                        <ul id="banned-users-list" style="list-style:none; padding:0;"></ul>
+                    </div>
+                </div>
+                <button id="close-modal-btn" class="btn btn-secondary" style="margin-top:20px;">Cerrar</button>
+            `;
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+            document.getElementById('close-modal-btn').onclick = () => modal.style.display = 'none';
+            modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none';};
+        }
+
+        document.getElementById('modal-session-id').textContent = sessionId;
+        const mutedList = document.getElementById('muted-users-list');
+        const bannedList = document.getElementById('banned-users-list');
+        mutedList.innerHTML = '<li>Cargando...</li>';
+        bannedList.innerHTML = '<li>Cargando...</li>';
+        modal.style.display = 'flex';
+
+        // Solicitar las listas al backend para esta sesión específica
+        // Necesitamos un evento 'admin_action' específico para el panel,
+        // o que el backend sepa que este socket es de un admin global.
+        // Por ahora, asumiremos que el 'admin_action' del backend puede identificar la sesión.
+        // El backend debe responder con un evento como 'moderation_lists_update'
+        socket.emit('admin_action', { session_id: sessionId, action: 'get_moderation_lists' });
+    }
+
+    socket.on('moderation_lists_update', (data) => { // data = { muted: [], banned: [] }
+        const mutedList = document.getElementById('muted-users-list');
+        const bannedList = document.getElementById('banned-users-list');
+        const currentSessionId = document.getElementById('modal-session-id').textContent;
+
+        if (!mutedList || !bannedList) return; // Modal no está abierto o elementos no encontrados
+
+        mutedList.innerHTML = '';
+        if (data.muted && data.muted.length > 0) {
+            data.muted.forEach(username => {
+                const li = document.createElement('li');
+                li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding: 5px 0; border-bottom: 1px solid var(--bg-light);';
+                li.innerHTML = `<span>${username}</span> <button class="btn btn-small btn-warning unmuted-btn" data-username="${username}">Quitar Silencio</button>`;
+                mutedList.appendChild(li);
+            });
+            document.querySelectorAll('.unmuted-btn').forEach(btn => {
+                btn.onclick = function() {
+                    socket.emit('admin_action', { session_id: currentSessionId, action: 'unmute_user', username: this.dataset.username, room_type: 'watch_room' }); // Asumir watch_room
+                    // Podríamos esperar confirmación o actualizar optimisticamente
+                    this.closest('li').remove();
+                };
+            });
+        } else {
+            mutedList.innerHTML = '<li>No hay usuarios silenciados.</li>';
+        }
+
+        bannedList.innerHTML = '';
+        if (data.banned && data.banned.length > 0) {
+            data.banned.forEach(username => {
+                const li = document.createElement('li');
+                li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding: 5px 0; border-bottom: 1px solid var(--bg-light);';
+                li.innerHTML = `<span>${username}</span> <button class="btn btn-small btn-danger unban-btn" data-username="${username}">Desbanear</button>`;
+                bannedList.appendChild(li);
+            });
+            document.querySelectorAll('.unban-btn').forEach(btn => {
+                btn.onclick = function() {
+                    if (confirm(`¿Desbanear a ${this.dataset.username} de esta sesión?`)) {
+                        socket.emit('admin_action', { session_id: currentSessionId, action: 'unban_user', username: this.dataset.username, room_type: 'watch_room' }); // Asumir watch_room
+                        this.closest('li').remove();
+                    }
+                };
+            });
+        } else {
+            bannedList.innerHTML = '<li>No hay usuarios baneados.</li>';
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', setupAdminModerationTools);
+
 </script>
 {% endblock %}

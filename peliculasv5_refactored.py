@@ -356,8 +356,16 @@ def vestibulo(session_id):
                         'users': {'vestibule': {}, 'watch_room': {}},
                         'chat': {'vestibule': [], 'watch_room': []},
                         'state': {'status': STATUS_VESTIBULE, 'chat_enabled': True},
-                        'muted_users': set()
+                        'muted_users': set(),
+                        'banned_users': {} # username: sid (o True si no tenemos sid en el momento del ban)
                     }
+                    # Cargar mutes/bans persistentes si existieran (Fase 2)
+                    # Ejemplo:
+                    # mutes_bans_json = s_db['moderation_data']
+                    # if mutes_bans_json:
+                    #     mod_data = json.loads(mutes_bans_json)
+                    #     active_sessions[session_id]['muted_users'] = set(mod_data.get('muted', []))
+                    #     active_sessions[session_id]['banned_users'] = mod_data.get('banned', {})
                     conn = get_db_connection(); conn.execute("UPDATE sessions SET status = ? WHERE id = ?", (STATUS_VESTIBULE, s_db['id'])); conn.commit(); conn.close()
                     socketio.emit('admin_panel_update')
             return redirect(url_for('vestibulo', session_id=session_id))
@@ -424,8 +432,15 @@ def on_join(data):
             emit('force_disconnect', {'reason': 'La sesión ha finalizado.'}); return
         
         s = active_sessions[session_id]
-        print(f"[Join]: Usuario '{username}' (sid: {sid}) se une a '{room_type}' en sesión '{session_id}'.")
-        
+        print(f"[Join]: Usuario '{username}' (sid: {sid}) intentando unirse a '{room_type}' en sesión '{session_id}'.")
+
+        # Verificar si el usuario está baneado
+        if username in s.get('banned_users', {}):
+            print(f"[Join Denied]: Usuario '{username}' está baneado de la sesión '{session_id}'. Desconectando.")
+            emit('force_disconnect', {'reason': 'Estás baneado de esta sesión.'})
+            disconnect(sid) # Asegurarse de que el usuario es desconectado
+            return
+
         # Asignar a la sala de socket.io correcta
         socket_room_id = f"{session_id}_{room_type}" if room_type == 'vestibule' else session_id
         join_room(socket_room_id)
@@ -438,13 +453,21 @@ def on_join(data):
         emit('system_message', {'text': f"'{username}' se ha unido."}, to=socket_room_id, include_self=False)
         
         print(f"[State Sent]: Enviando 'initial_state' a '{username}'. Estado actual: {s['state']}")
+        # Enviar también la lista de usuarios muteados/baneados para que el cliente admin pueda actualizar su UI
+        user_lists_for_client = {
+            'muted': list(s.get('muted_users', set())),
+            'banned': list(s.get('banned_users', {}).keys())
+        }
         emit('initial_state', {
             'my_sid': sid, 'my_username': username,
             'chat_history': s['chat'].get(room_type, []),
             'state': s['state'],
-            'playlist': s['playlist']
+            'playlist': s['playlist'],
+            'user_lists': user_lists_for_client # Nuevo: enviar listas de moderación
         })
         socketio.emit('admin_panel_update')
+        # Enviar actualización de listas de usuarios a todos en la sala (para admins)
+        socketio.emit('user_list_update', user_lists_for_client, to=socket_room_id)
 
 @socketio.on('chat_message')
 def on_chat_message(data):
@@ -459,9 +482,21 @@ def on_chat_message(data):
         if not s['state'].get('chat_enabled', True): return
         
         username = s['users'].get(room_type, {}).get(sid)
-        if not username or username in s.get('muted_users', set()): return
+        # Comprobar si el usuario está muteado o baneado
+        if not username or username in s.get('muted_users', set()) or username in s.get('banned_users', {}):
+            # Podríamos enviar un mensaje al usuario informándole que está silenciado,
+            # pero por ahora simplemente ignoramos el mensaje.
+            print(f"[Chat Denied]: Mensaje de '{username}' (muteado/baneado) ignorado en sesión '{session_id}'.")
+            return
 
-        msg = {'sid': sid, 'username': username, 'text': message_text}
+        # Añadir ID único y timestamp al mensaje
+        msg = {
+            'id': str(uuid.uuid4()), # ID único para el mensaje
+            'sid': sid,
+            'username': username,
+            'text': message_text,
+            'timestamp': time.time()
+        }
         s['chat'][room_type].append(msg)
         
         socket_room_id = f"{session_id}_{room_type}" if room_type == 'vestibule' else session_id
@@ -477,15 +512,18 @@ def on_admin_action(data):
         if session_id not in active_sessions: return
         s = active_sessions[session_id]
         
-        # Las acciones de chat necesitan saber la sala (vestibulo o watch_room)
-        room_type = data.get('room_type')
+        room_type = data.get('room_type', 'watch_room') # Default a watch_room si no se especifica
         socket_room_id = f"{session_id}_{room_type}" if room_type == 'vestibule' else session_id
+
+        user_lists_for_client = lambda: { # Funcion para obtener listas actualizadas
+            'muted': list(s.get('muted_users', set())),
+            'banned': list(s.get('banned_users', {}).keys())
+        }
 
         if action == 'force_start':
             start_projection(session_id)
         
         elif action == 'state_change':
-            # Aplicar solo a sesiones activas
             if s['state']['status'] == STATUS_ACTIVE:
                 s['state'].update(data.get('state', {}))
                 socketio.emit('state_change', s['state'], to=session_id)
@@ -503,14 +541,81 @@ def on_admin_action(data):
             username = data.get('username')
             if username:
                 s['muted_users'].add(username)
+                print(f"[Admin Action]: Usuario '{username}' muteado en sesión '{session_id}'.")
                 socketio.emit('system_message', {'text': f"'{username}' ha sido silenciado por un administrador."}, to=socket_room_id)
+                # Notificar al usuario específico que ha sido muteado (opcional, pero buena UX)
+                user_sid_to_notify = next((sid for sid, uname in s['users'].get(room_type, {}).items() if uname == username), None)
+                if user_sid_to_notify:
+                    socketio.emit('personal_notification', {'text': 'Has sido silenciado en este chat.'}, to=user_sid_to_notify)
+                socketio.emit('user_list_update', user_lists_for_client(), to=socket_room_id)
+
+
+        elif action == 'unmute_user':
+            username = data.get('username')
+            if username and username in s['muted_users']:
+                s['muted_users'].remove(username)
+                print(f"[Admin Action]: Usuario '{username}' desmuteado en sesión '{session_id}'.")
+                socketio.emit('system_message', {'text': f"A '{username}' se le ha quitado el silencio."}, to=socket_room_id)
+                user_sid_to_notify = next((sid for sid, uname in s['users'].get(room_type, {}).items() if uname == username), None)
+                if user_sid_to_notify:
+                    socketio.emit('personal_notification', {'text': 'Se te ha quitado el silencio en este chat.'}, to=user_sid_to_notify)
+                socketio.emit('user_list_update', user_lists_for_client(), to=socket_room_id)
 
         elif action == 'ban_user':
-            username = data.get('username'); sid_to_ban = data.get('sid')
-            if sid_to_ban and username:
-                emit('force_disconnect', {'reason': 'Has sido baneado de la sesión por un administrador.'}, to=sid_to_ban)
-                disconnect(sid=sid_to_ban)
-                socketio.emit('system_message', {'text': f"'{username}' ha sido baneado por un administrador."}, to=socket_room_id)
+            username = data.get('username')
+            sid_to_ban = data.get('sid') # SID del usuario a banear, puede ser None si se banea "offline"
+
+            if username:
+                s['banned_users'][username] = sid_to_ban if sid_to_ban else True # Guardar True si no hay SID
+                print(f"[Admin Action]: Usuario '{username}' baneado de la sesión '{session_id}'.")
+                socketio.emit('system_message', {'text': f"'{username}' ha sido baneado de la sesión por un administrador."}, to=socket_room_id)
+
+                # Desconectar al usuario si está online (tiene SID y está en la lista de usuarios)
+                actual_sid_to_disconnect = None
+                if sid_to_ban and sid_to_ban in s['users'].get(room_type, {}):
+                     actual_sid_to_disconnect = sid_to_ban
+                else: # Intentar encontrar el SID por username si no se proveyó o no coincide
+                    actual_sid_to_disconnect = next((sid_iter for sid_iter, uname in s['users'].get(room_type, {}).items() if uname == username), None)
+
+                if actual_sid_to_disconnect:
+                    print(f"Intentando desconectar SID {actual_sid_to_disconnect} perteneciente a {username}")
+                    # Emitir primero, luego desconectar. El disconnect() puede ser problemático dentro del lock de socketio
+                    # si la desconexión es síncrona y trata de modificar la misma estructura que está lockeada.
+                    # Es más seguro hacerlo fuera del lock o de forma asíncrona.
+                    # Por ahora, lo dejamos así, pero es un punto a revisar si da problemas de deadlock.
+                    socketio.emit('force_disconnect', {'reason': 'Has sido baneado de esta sesión por un administrador.'}, to=actual_sid_to_disconnect)
+                    socketio.server.disconnect(actual_sid_to_disconnect, namespace='/') # Usar el método del servidor para desconectar
+                    print(f"SID {actual_sid_to_disconnect} ({username}) desconectado (o intento enviado).")
+                else:
+                    print(f"Usuario '{username}' baneado pero no encontrado en línea para desconexión inmediata.")
+
+
+                socketio.emit('user_list_update', user_lists_for_client(), to=socket_room_id)
+
+        elif action == 'unban_user': # Generalmente llamado desde el panel de admin
+            username = data.get('username')
+            if username and username in s['banned_users']:
+                del s['banned_users'][username]
+                print(f"[Admin Action]: Usuario '{username}' desbaneado de la sesión '{session_id}'.")
+                socketio.emit('system_message', {'text': f"'{username}' ha sido desbaneado de la sesión."}, to=socket_room_id)
+                socketio.emit('user_list_update', user_lists_for_client(), to=socket_room_id)
+
+        elif action == 'delete_message':
+            message_id = data.get('message_id')
+            room_chat = s['chat'].get(room_type)
+            if message_id and room_chat is not None:
+                original_len = len(room_chat)
+                s['chat'][room_type] = [msg for msg in room_chat if msg.get('id') != message_id]
+                if len(s['chat'][room_type]) < original_len:
+                    print(f"[Admin Action]: Mensaje '{message_id}' borrado de la sesión '{session_id}', sala '{room_type}'.")
+                    socketio.emit('message_deleted', {'id': message_id}, to=socket_room_id)
+                else:
+                    print(f"[Admin Action Warning]: No se encontró el mensaje '{message_id}' para borrar en '{session_id}', sala '{room_type}'.")
+
+        elif action == 'get_moderation_lists': # Para el panel de admin
+            # Este evento debería ser emitido solo al admin que lo solicita
+            requesting_admin_sid = request.sid
+            emit('moderation_lists_update', user_lists_for_client(), to=requesting_admin_sid)
 
 @socketio.on('request_state_sync')
 def on_request_state(data):
@@ -529,16 +634,45 @@ def on_request_state(data):
 @socketio.on('disconnect')
 def on_disconnect():
     sid = request.sid
+    sid_found_and_removed = False
+    session_id_of_disconnect = None
+    room_type_of_disconnect = None
+    username_disconnected = "N/A"
+
     with sessions_lock:
-        for session_id, s_data in active_sessions.items():
-            for room_type in ['vestibule', 'watch_room']:
-                if sid in s_data['users'][room_type]:
-                    username = s_data['users'][room_type].pop(sid)
-                    socket_room_id = f"{session_id}_{room_type}" if room_type == 'vestibule' else session_id
-                    emit('system_message', {'text': f"'{username}' ha salido."}, to=socket_room_id)
-                    print(f"Usuario '{username}' (sid: {sid}) desconectado de {room_type} en sesión {session_id}.")
-                    socketio.emit('admin_panel_update')
-                    return
+        for session_id_iter, s_data in active_sessions.items():
+            for r_type in ['vestibule', 'watch_room']:
+                if sid in s_data['users'][r_type]:
+                    username_disconnected = s_data['users'][r_type].pop(sid)
+                    session_id_of_disconnect = session_id_iter
+                    room_type_of_disconnect = r_type
+                    sid_found_and_removed = True
+                    print(f"Usuario '{username_disconnected}' (sid: {sid}) desconectado de {r_type} en sesión {session_id_iter}.")
+                    break
+            if sid_found_and_removed:
+                break
+
+    if sid_found_and_removed and session_id_of_disconnect and room_type_of_disconnect:
+        # Emitir fuera del lock si es posible, o asegurar que el lock no cause problemas
+        # La sala de socket.io correcta para el mensaje de "ha salido"
+        socket_room_id_for_message = f"{session_id_of_disconnect}_{room_type_of_disconnect}" if room_type_of_disconnect == 'vestibule' else session_id_of_disconnect
+
+        # Verificar si la sesión aún existe antes de emitir (podría haber sido eliminada)
+        with sessions_lock:
+            if session_id_of_disconnect in active_sessions:
+                socketio.emit('system_message', {'text': f"'{username_disconnected}' ha salido."}, to=socket_room_id_for_message)
+
+                # Actualizar listas de moderación para los admins en esa sala
+                s = active_sessions[session_id_of_disconnect]
+                user_lists = {
+                    'muted': list(s.get('muted_users', set())),
+                    'banned': list(s.get('banned_users', {}).keys())
+                }
+                socketio.emit('user_list_update', user_lists, to=socket_room_id_for_message)
+
+        socketio.emit('admin_panel_update') # Actualizar el panel de admin
+    else:
+        print(f"SID {sid} se desconectó, pero no se encontró en ninguna sesión activa/sala conocida.")
 
 # --- 8. INICIO DE LA APLICACIÓN ---
 if __name__ == '__main__':
