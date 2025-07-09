@@ -106,15 +106,25 @@ class VirtualProjectionist(threading.Thread):
                 # Solo avanzar el tiempo si la sesión está ACTIVA y en PLAY
                 if state.get('status') == STATUS_ACTIVE and state.get('playing'):
                     state['time'] += 1
-                    current_video_info = s_data['playlist'][state['current_video_index']]
-                    duration = current_video_info.get('duration', 3600)
-                    
-                    if state['time'] >= duration:
-                        self.next_video()
+                    # Asegurarse de que current_video_index es válido antes de acceder a la playlist
+                    if 0 <= state['current_video_index'] < len(s_data['playlist']):
+                        current_video_info = s_data['playlist'][state['current_video_index']]
+                        duration = current_video_info.get('duration', 3600) # Default a 1 hora si no hay duración
+
+                        if state['time'] >= duration:
+                            print(f"[Projectionist {self.session_id}]: Video finalizado por tiempo ({state['time']} >= {duration}). Pasando al siguiente.")
+                            self.next_video()
+                        else:
+                            # Solo enviar pulso si hay alguien en la sala de cine
+                            if s_data['users']['watch_room']:
+                                # print(f"[Projectionist {self.session_id}]: Emitiendo sync_pulse, time: {state['time']}") # Log muy verboso
+                                socketio.emit('sync_pulse', {'time': state['time']}, to=self.session_id)
                     else:
-                        # Solo enviar pulso si hay alguien en la sala de cine
-                        if s_data['users']['watch_room']:
-                           socketio.emit('sync_pulse', {'time': state['time']}, to=self.session_id)
+                        # Índice de video inválido, podría ser una condición de error.
+                        # Esto podría ocurrir si la playlist está vacía o el índice se corrompe.
+                        print(f"[Projectionist Error {self.session_id}]: Índice de video inválido ({state['current_video_index']}) en el bucle principal. Deteniendo proyeccionista.")
+                        self.finish_session() # O alguna otra forma de manejo de error, como intentar resetear.
+                        self.stop() # Detener el hilo para evitar bucles infinitos de error.
 
         print(f"[Projectionist {self.session_id}]: Hilo detenido.")
 
@@ -125,12 +135,18 @@ class VirtualProjectionist(threading.Thread):
         state['current_video_index'] += 1
         
         if state['current_video_index'] >= len(s_data['playlist']):
+            print(f"[Projectionist {self.session_id}]: No hay más videos en la playlist. Finalizando sesión.")
             self.finish_session()
         else:
             state['time'] = 0
             state['playing'] = True # Continuar reproduciendo automáticamente
-            next_video = s_data['playlist'][state['current_video_index']]
-            print(f"[Projectionist {self.session_id}]: Cambiando al siguiente vídeo: {next_video['src']}")
+
+            # Actualizar video_src y video_duration en el estado para el nuevo video
+            current_video_info = s_data['playlist'][state['current_video_index']]
+            state['video_src'] = current_video_info['src']
+            state['video_duration'] = current_video_info.get('duration', 3600)
+
+            print(f"[Projectionist {self.session_id}]: Cambiando al siguiente vídeo: {state['video_src']}. Estado: {state}")
             socketio.emit('play_next_video', {'state': state}, to=self.session_id)
 
     def finish_session(self):
@@ -388,32 +404,64 @@ def start_projection(session_id):
         
         # 1. Actualizar estado a ACTIVO
         s_data['state'].update({
-            'status': STATUS_ACTIVE, 'playing': False, 'time': 0, 'current_video_index': 0
+            'status': STATUS_ACTIVE,
+            'playing': False,
+            'time': 0,
+            'current_video_index': 0,
+            'video_src': s_data['playlist'][0]['src'], # Añadir src inicial para cliente
+            'video_duration': s_data['playlist'][0]['duration'] # Añadir duration inicial
         })
+        print(f"[Transition {session_id}]: Estado inicializado a {s_data['state']}")
         
         # 2. Notificar a los clientes del vestíbulo para que se muevan
+        # Esto debería suceder ANTES de que el proyeccionista pueda empezar a emitir pulsos
+        # o cambios de estado que los del vestíbulo no deberían recibir.
         socketio.emit('force_start_projection', to=f"{session_id}_vestibule")
+        print(f"[Transition {session_id}]: 'force_start_projection' emitido a {session_id}_vestibule.")
 
         # 3. Iniciar el hilo del proyeccionista
+        # Es importante que el proyeccionista no empiece a emitir 'sync_pulse' hasta que 'playing' sea True.
         projectionist = VirtualProjectionist(session_id)
         projectionist.start()
         s_data['projectionist_thread'] = projectionist
+        print(f"[Transition {session_id}]: Hilo de proyeccionista iniciado.")
         
         # 4. Programar el inicio de la reproducción tras una cuenta atrás
-        def delayed_start(sid):
-            # Emitir a la sala principal (donde estarán los de watch_room)
-            socketio.emit('playback_starting', {'countdown': 5}, to=sid)
-            socketio.sleep(5)
-            with sessions_lock:
-                if sid in active_sessions and active_sessions[sid]['state']['status'] == STATUS_ACTIVE:
-                    print(f"[Playback {sid}]: Cuenta atrás finalizada. Estableciendo 'playing' a True.")
-                    active_sessions[sid]['state']['playing'] = True
-                    # Notificar a todos los clientes del cambio de estado final (ahora con playing=True)
-                    socketio.emit('state_change', active_sessions[sid]['state'], to=sid)
+        def delayed_start(target_session_id):
+            try:
+                print(f"[Delayed Start {target_session_id}]: Iniciando cuenta atrás para reproducción.")
+                # Emitir a la sala principal (donde estarán los de watch_room)
+                socketio.emit('playback_starting', {'countdown': 5}, to=target_session_id)
+                socketio.sleep(5) # Espera de 5 segundos
+
+                with sessions_lock:
+                    # Volver a verificar si la sesión todavía existe y está en el estado correcto
+                    if target_session_id in active_sessions and \
+                       active_sessions[target_session_id]['state']['status'] == STATUS_ACTIVE:
+
+                        current_session_data = active_sessions[target_session_id]
+                        current_state = current_session_data['state']
+
+                        # Asegurar que el índice del video es válido
+                        if 0 <= current_state['current_video_index'] < len(current_session_data['playlist']):
+                            current_state['playing'] = True
+                            # El 'time' ya es 0. No es necesario resetearlo aquí.
+                            print(f"[Playback {target_session_id}]: Cuenta atrás finalizada. Estableciendo 'playing' a True. Estado: {current_state}")
+                            # Notificar a todos los clientes del cambio de estado final (ahora con playing=True)
+                            socketio.emit('state_change', current_state, to=target_session_id)
+                        else:
+                            print(f"[Playback Error {target_session_id}]: Índice de video inválido ({current_state['current_video_index']}) al intentar iniciar la reproducción.")
+                            # Aquí se podría intentar finalizar la sesión o manejar el error de otra forma
+                    else:
+                        print(f"[Playback Aborted {target_session_id}]: La sesión ya no existe o no está activa al finalizar la cuenta atrás.")
+            except Exception as e:
+                print(f"[Error en delayed_start para {target_session_id}]: {e}")
         
-        socketio.start_background_task(target=delayed_start, sid=session_id)
+        socketio.start_background_task(target=delayed_start, target_session_id=session_id)
+        print(f"[Transition {session_id}]: Tarea 'delayed_start' programada.")
         
         # 5. Actualizar la base de datos y el panel de admin
+        # Esto puede hacerse antes, ya que el estado en memoria es lo que guía la reproducción.
         conn = get_db_connection()
         conn.execute("UPDATE sessions SET status = ? WHERE id = ?", (STATUS_ACTIVE, session_id))
         conn.commit(); conn.close()

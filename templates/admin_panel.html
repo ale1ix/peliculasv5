@@ -100,12 +100,13 @@
 
 {% block scripts %}
 <script>
-    const socket = io();
-    // Recargar el panel de admin si hay cambios en las sesiones
-    const socket = io(); // Ya está definido globalmente si chat_logic.js se carga antes o se define aquí
+    // Asegurarse de que socket se define solo una vez.
+    // Si chat_logic.js (o layout principal) ya define un window.chatApp.socket, usar ese.
+    // Si no, este script es el principal para esta página y puede definirlo.
+    const socket = window.chatApp ? window.chatApp.socket : io();
 
     socket.on('admin_panel_update', () => {
-        // Podríamos hacer una recarga más inteligente, pero por ahora reload es simple.
+        console.log("[Admin Panel] Recibido admin_panel_update. Recargando...");
         location.reload();
     });
 

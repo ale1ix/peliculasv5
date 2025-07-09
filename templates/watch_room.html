@@ -72,28 +72,95 @@ document.addEventListener('DOMContentLoaded', () => {
             playPauseBtn: document.getElementById('play-pause-btn'),
             progressBar: document.getElementById('progress-bar')
         };
-        let playlist = [], isSeeking = false;
+        let playlist = [], currentServerState = {}, localPlaylistIndex = -1, isSeeking = false;
 
-        function applyState(state, forceSrc = false) {
-            if (!state || !playlist || playlist.length === 0) return;
-            const currentVideoData = playlist[state.current_video_index];
-            if (!currentVideoData) return;
+        function logClientError(message, errorData = null) {
+            console.error(`[CLIENT ERROR ${sessionId}]: ${message}`, errorData);
+            // Podrías enviar esto al servidor también si tuvieras un endpoint de logging
+            // socket.emit('client_error', { session_id: sessionId, error: message, data: errorData });
+        }
 
-            if (forceSrc || !elements.video.src.endsWith(currentVideoData.src)) {
-                elements.video.src = `/static/${currentVideoData.src}`;
-                if (elements.progressBar) elements.progressBar.max = currentVideoData.duration || 3600;
+        function applyState(newState, forceSrc = false) {
+            console.log(`[applyState ${sessionId}]: Recibido nuevo estado:`, JSON.parse(JSON.stringify(newState)), `Forzar SRC: ${forceSrc}`);
+            currentServerState = newState; // Actualizar el estado de referencia del servidor
+
+            if (!newState || typeof newState.current_video_index === 'undefined') {
+                logClientError("Estado inválido o índice de video no definido.", newState);
+                return;
             }
-            if (Math.abs(elements.video.currentTime - state.time) > 2.5) {
-                elements.video.currentTime = state.time;
+
+            if (!playlist || playlist.length === 0) {
+                logClientError("Playlist no disponible o vacía al aplicar estado.", playlist);
+                // Podríamos solicitar la playlist aquí si fuera necesario
+                return;
             }
-            if (state.playing && elements.video.paused) {
-                elements.video.play().catch(e => {});
-            } else if (!state.playing && !elements.video.paused) {
-                elements.video.pause();
+
+            const newPlaylistIndex = newState.current_video_index;
+            if (newPlaylistIndex < 0 || newPlaylistIndex >= playlist.length) {
+                logClientError(`Índice de video fuera de rango: ${newPlaylistIndex}. Longitud de Playlist: ${playlist.length}`, newState);
+                return; // Evitar error fatal
             }
+
+            const currentVideoData = playlist[newPlaylistIndex];
+            if (!currentVideoData || !currentVideoData.src) {
+                logClientError(`Datos del video actual inválidos o sin 'src' en el índice ${newPlaylistIndex}.`, currentVideoData);
+                return; // Evitar error fatal
+            }
+
+            console.log(`[applyState ${sessionId}]: Aplicando video: ${currentVideoData.src}, Tiempo: ${newState.time}, Playing: ${newState.playing}`);
+
+            // Actualizar fuente del video si es necesario (cambio de video o forzado)
+            const newVideoSrc = `/static/${currentVideoData.src}`;
+            if (forceSrc || !elements.video.src.includes(currentVideoData.src) || localPlaylistIndex !== newPlaylistIndex) {
+                console.log(`[applyState ${sessionId}]: Cambiando src del video a: ${newVideoSrc}`);
+                elements.video.src = newVideoSrc;
+                localPlaylistIndex = newPlaylistIndex; // Actualizar índice local
+                if (elements.progressBar) {
+                    elements.progressBar.max = currentVideoData.duration || 3600;
+                    elements.progressBar.value = newState.time || 0; // Asegurar que la barra se actualice con el tiempo del nuevo video
+                }
+                 // Cuando se cambia el src, el video se pausa. Esperar a que se cargue para sincronizar.
+                elements.video.load(); // Es importante llamar a load() después de cambiar src
+            }
+
+            // Sincronizar tiempo y estado de reproducción una vez que los metadatos estén cargados (o si ya lo están)
+            const syncVideoProperties = () => {
+                // Sincronizar tiempo si la diferencia es significativa
+                if (Math.abs(elements.video.currentTime - newState.time) > 1.5) { // Reducido umbral para inicio más rápido
+                    console.log(`[applyState ${sessionId}]: Ajustando currentTime de ${elements.video.currentTime} a ${newState.time}`);
+                    elements.video.currentTime = newState.time;
+                }
+
+                // Sincronizar estado de reproducción (play/pause)
+                if (newState.playing && elements.video.paused) {
+                    console.log(`[applyState ${sessionId}]: Intentando reproducir video.`);
+                    elements.video.play().catch(e => {
+                        logClientError('Error al intentar video.play() en applyState.', e);
+                        // Podría ser necesario mostrar de nuevo el unmuteOverlay si el error es por interacción
+                        if (e.name === "NotAllowedError" && elements.video.muted) {
+                            elements.unmuteOverlay.classList.remove('hidden');
+                        }
+                    });
+                } else if (!newState.playing && !elements.video.paused) {
+                    console.log(`[applyState ${sessionId}]: Pausando video.`);
+                    elements.video.pause();
+                }
+            };
+
+            if (elements.video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+                syncVideoProperties();
+            } else {
+                elements.video.onloadedmetadata = () => {
+                    console.log(`[applyState ${sessionId}]: Metadatos cargados para ${elements.video.src}. Sincronizando propiedades.`);
+                    syncVideoProperties();
+                    elements.video.onloadedmetadata = null; // Limpiar listener para evitar múltiples llamadas
+                };
+            }
+
+            // Actualizar controles de admin
             if (isAdmin && elements.playPauseBtn && elements.progressBar) {
-                elements.playPauseBtn.textContent = state.playing ? '⏸️' : '▶️';
-                if (!isSeeking) elements.progressBar.value = state.time;
+                elements.playPauseBtn.textContent = newState.playing ? '⏸️' : '▶️';
+                if (!isSeeking) elements.progressBar.value = newState.time;
             }
         }
 
@@ -122,15 +189,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Los listeners de chat ya no están aquí
         socket.on('initial_state', (data) => {
-            playlist = data.playlist;
-            if (data.state.status === 'active') {
-                applyState(data.state, true);
+            console.log(`[initial_state ${sessionId}]: Recibido:`, JSON.parse(JSON.stringify(data)));
+            playlist = data.playlist; // Guardar la playlist
+            if (!playlist || playlist.length === 0) {
+                logClientError("Playlist vacía o no definida en initial_state.", data);
+            }
+            // Aplicar el estado solo si la sesión está activa.
+            // Si está en vestíbulo, no se hace nada con el video aquí.
+            if (data.state && data.state.status === 'active') {
+                applyState(data.state, true); // Forzar src para el primer video
+            } else {
+                console.log(`[initial_state ${sessionId}]: Sesión no activa o sin estado, no se aplica estado de video.`);
             }
         });
-        socket.on('state_change', (state) => applyState(state));
-        socket.on('sync_pulse', (data) => { if (!isSeeking && !elements.video.paused && Math.abs(data.time - elements.video.currentTime) > 2.5) { elements.video.currentTime = data.time; } if (isAdmin && elements.progressBar && !isSeeking) { elements.progressBar.value = data.time; }});
-        socket.on('play_next_video', (data) => applyState(data.state, true));
+
+        socket.on('state_change', (newState) => {
+            console.log(`[state_change ${sessionId}]: Recibido:`, JSON.parse(JSON.stringify(newState)));
+            // No forzar src aquí a menos que el video haya cambiado (lo cual debería venir por play_next_video)
+            applyState(newState);
+        });
+
+        socket.on('sync_pulse', (data) => {
+            // Solo aplicar si el estado actual del servidor indica que está reproduciendo
+            // y el video local no está ya muy cerca del tiempo del servidor.
+            if (currentServerState && currentServerState.playing && elements.video && !elements.video.paused && !isSeeking) {
+                if (Math.abs(data.time - elements.video.currentTime) > 1.5) { // Umbral ajustado
+                    console.log(`[sync_pulse ${sessionId}]: Ajustando tiempo de ${elements.video.currentTime} a ${data.time}`);
+                    elements.video.currentTime = data.time;
+                }
+                if (isAdmin && elements.progressBar) {
+                    elements.progressBar.value = data.time;
+                }
+            }
+        });
+
+        socket.on('play_next_video', (data) => {
+            console.log(`[play_next_video ${sessionId}]: Recibido:`, JSON.parse(JSON.stringify(data)));
+            applyState(data.state, true); // Forzar cambio de src
+        });
+
         socket.on('playback_starting', (data) => {
+            console.log(`[playback_starting ${sessionId}]: Recibida cuenta atrás: ${data.countdown}`);
             elements.countdownOverlay.classList.remove('hidden');
             let count = data.countdown;
             elements.countdownTimer.textContent = count;
