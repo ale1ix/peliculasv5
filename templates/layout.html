@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Cinesa Virtual{% endblock %}</title>
+    <style>
+        /* Estilos base, sin cambios */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        :root {
+            --bg-dark: #0D1117; --bg-medium: #161B22; --bg-light: #21262D;
+            --border-color: #30363D; --text-primary: #C9D1D9; --text-secondary: #8B949E;
+            --accent-primary: #58A6FF; --accent-secondary: #BF87FF; --accent-gradient: linear-gradient(45deg, var(--accent-primary), var(--accent-secondary));
+            --success: #3FB950; --danger: #F85149; --warning: #F5A623;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif; background-color: var(--bg-dark);
+            color: var(--text-primary); margin: 0; line-height: 1.6;
+            -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .container { width: 100%; max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
+        h1, h2, h3 { color: white; font-weight: 700; margin-top: 0; }
+        a { color: var(--accent-primary); text-decoration: none; transition: color 0.2s; }
+        a:hover { color: white; }
+        .btn {
+            display: inline-block; padding: 10px 20px; border: none; border-radius: 6px;
+            background-color: var(--accent-primary); color: var(--bg-dark) !important; font-weight: 700;
+            cursor: pointer; text-align: center; transition: all 0.2s ease-in-out; text-decoration: none !important;
+        }
+        .btn:hover { filter: brightness(1.1); }
+        .btn:disabled { background-color: var(--bg-light); color: var(--text-secondary) !important; cursor: not-allowed; }
+        .btn-secondary { background-color: var(--bg-light); color: var(--text-primary) !important; }
+        .btn-danger { background-color: var(--danger); }
+        .btn-small { padding: 5px 10px; font-size: 0.9em; }
+        .card { background-color: var(--bg-medium); border: 1px solid var(--border-color); border-radius: 8px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 500; color: var(--text-secondary); }
+        input[type="text"], input[type="password"], input[type="datetime-local"], select, input[type="file"] {
+            width: 100%; padding: 10px; background-color: var(--bg-dark);
+            border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary);
+            font-size: 1em; transition: border-color 0.2s, box-shadow 0.2s; font-family: 'Inter', sans-serif;
+        }
+        input:focus, select:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2); outline: none; }
+    </style>
+    {% block head_styles %}{% endblock %}
+</head>
+<body>
+    
+    <!-- CORRECCIÓN: Unificamos el nombre del bloque a 'content' -->
+    {% block content %}{% endblock %}
+    
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

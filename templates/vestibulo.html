@@ -1,0 +1,247 @@
+{% extends "layout.html" %}
+
+{% block title %}Vestíbulo - {{ session_data.movie_title }}{% endblock %}
+
+{% block head_styles %}
+<style>
+    /* 1. Contenedor principal de la página */
+    .vestibule-page-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        padding: 40px;
+        gap: 50px;
+        flex-wrap: wrap;
+    }
+
+    /* 2. Panel izquierdo: Información de la película */
+    .movie-info-panel {
+        max-width: 400px;
+        width: 100%;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+    }
+    .poster-image {
+        width: 100%;
+        max-width: 300px;
+        border-radius: 8px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .movie-info-panel h1 { font-size: 2.2em; margin: 0; }
+
+    #countdown {
+        font-size: 4.5em; /* Tamaño grande para los números */
+        font-weight: 700;
+        line-height: 1;
+        background: var(--accent-gradient);
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent;
+        /* ARREGLO PARA "¡Comenzando!" */
+        white-space: nowrap; /* Evita que el texto se parta en dos líneas */
+    }
+    /* Si la pantalla es muy pequeña, reducimos la fuente del contador */
+    @media (max-width: 400px) {
+        #countdown { font-size: 3em; }
+    }
+
+
+    /* 3. Estilos COMPLETOS para el Chat UI (restaurando las burbujas) */
+    .chat-ui {
+        width: 100%;
+        max-width: 550px;
+        height: 75vh;
+        min-height: 600px;
+        display: flex;
+        flex-direction: column;
+        background-color: var(--bg-medium);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+    }
+    .chat-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px 20px;
+        border-bottom: 1px solid var(--border-color);
+        font-weight: bold;
+    }
+    .chat-box {
+        flex-grow: 1;
+        padding: 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+    }
+    .chat-input-area, .chat-username-area {
+        display: flex;
+        gap: 10px;
+        padding: 15px;
+        border-top: 1px solid var(--border-color);
+    }
+    #chat-input, #username-input { flex-grow: 1; }
+    
+    /* Estilos de los mensajes (burbujas, avatares, etc.) */
+    .message-wrapper {
+        display: flex;
+        max-width: 90%;
+        align-items: flex-start;
+    }
+    .my-message {
+        align-self: flex-end;
+        flex-direction: row-reverse;
+    }
+    .avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background-color: var(--bg-light);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        flex-shrink: 0;
+        margin-right: 10px;
+    }
+    .my-message .avatar {
+        margin-right: 0;
+        margin-left: 10px;
+    }
+    .message-content { text-align: left; }
+    .message-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+    }
+    .message-username { font-size: 0.9em; font-weight: bold; color: white; }
+    .message-time { font-size: 0.75em; color: var(--text-secondary); }
+    .message-bubble {
+        padding: 8px 12px;
+        border-radius: 18px;
+        background-color: var(--bg-light);
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        word-break: break-word;
+    }
+    .my-message .message-bubble {
+        background-color: var(--accent-primary);
+        color: var(--bg-dark);
+    }
+    .system-message {
+        text-align: center;
+        color: var(--text-secondary);
+        font-style: italic;
+        font-size: 0.9em;
+        width: 100%;
+    }
+
+    /* Switch de admin (sin cambios) */
+    .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
+    .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: var(--success); }
+    input:checked + .slider:before { transform: translateX(26px); }
+
+    /* 4. Media Query para Móviles */
+    @media (max-width: 1024px) {
+        .vestibule-page-container {
+            flex-direction: column;
+            padding: 20px;
+            gap: 30px;
+        }
+        .chat-ui {
+            height: 60vh;
+            min-height: 400px;
+            max-width: 100%;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="vestibule-page-container">
+
+    <!-- Panel de Información de la Película -->
+    <div class="movie-info-panel">
+        <img class="poster-image" src="{{ url_for('static', filename='posters/' + session_data.poster_file) if session_data.poster_file else '' }}" alt="Poster de {{ session_data.movie_title }}">
+        <h1>{{ session_data.movie_title }}</h1>
+        <h2 id="countdown">Cargando...</h2>
+        
+        {% if is_admin %}
+        <div class="admin-main-controls">
+            <button id="force-start-btn" class="btn btn-danger">Forzar Inicio</button>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- El Chat UI restaurado, que se renderiza con el include -->
+    {% set room_type = 'vestibule' %}
+    {% include "partials/_chat_ui.html" %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- El bloque de scripts no necesita cambios -->
+<script src="{{ url_for('static', filename='js/chat_logic.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const isAdmin = {{ is_admin | tojson }};
+        const sessionId = {{ session_id | tojson }};
+        let timeLeft = {{ time_to_start | tojson }};
+
+        const countdownEl = document.getElementById('countdown');
+        const forceStartBtn = document.getElementById('force-start-btn');
+        const chatHeaderText = document.getElementById('chat-header-text');
+
+        if (chatHeaderText) {
+             chatHeaderText.textContent = 'Chat del Vestíbulo';
+        }
+
+        let countdownInterval = setInterval(() => {
+            timeLeft--;
+            if (timeLeft > 0) {
+                const m = Math.floor(timeLeft / 60);
+                const s = Math.floor(timeLeft % 60);
+                countdownEl.textContent = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            } else {
+                // Aquí se cambia el texto, y el CSS lo mantendrá en una línea
+                countdownEl.textContent = "¡Comenzando!";
+                // Hacemos la fuente un poco más pequeña para este texto específico
+                countdownEl.style.fontSize = "2.5em"; 
+                clearInterval(countdownInterval);
+            }
+        }, 1000);
+
+        function setupSocketListeners(socket) {
+            if (isAdmin && forceStartBtn) {
+                forceStartBtn.addEventListener('click', () => {
+                    socket.emit('admin_action', { session_id: sessionId, action: 'force_start' });
+                });
+            }
+            
+            socket.on('force_start_projection', () => {
+                document.body.style.transition = 'opacity 0.5s ease-out';
+                document.body.style.opacity = '0';
+                setTimeout(() => {
+                    window.location.href = `/watch/${sessionId}`;
+                }, 500);
+            });
+        }
+
+        const socketCheckInterval = setInterval(() => {
+            if (window.chatApp && window.chatApp.socket) {
+                clearInterval(socketCheckInterval);
+                setupSocketListeners(window.chatApp.socket);
+            }
+        }, 100);
+    });
+</script>
+{% endblock %}

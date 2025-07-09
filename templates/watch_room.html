@@ -1,0 +1,146 @@
+{% extends "layout.html" %}
+
+{% block title %}Sala de Cine{% endblock %}
+
+{% block head_styles %}
+<style>
+    body { background-color: black; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+    #main-content { flex-grow: 1; height: 100%; display: flex; flex-direction: column; position: relative; }
+    #video-container { flex-grow: 1; background-color: black; display: flex; justify-content: center; align-items: center; }
+    video { width: 100%; height: 100%; object-fit: contain; }
+    .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; transition: opacity 0.5s; color: white; }
+    .overlay.hidden { opacity: 0; pointer-events: none; }
+    #admin-controls { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.7), transparent); padding: 20px; display: flex; flex-direction: column; z-index: 50; opacity: 0; transition: opacity 0.3s; }
+    #video-container:hover #admin-controls, #admin-controls.forced-visible { opacity: 1; }
+    #play-pause-btn { background: none; border: none; color: white; font-size: 2em; cursor: pointer; } #progress-bar { width: 100%; }
+
+    /* Los estilos del chat ahora vienen del fichero _chat_ui.html y el layout.html global */
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="main-content">
+    <div id="video-container">
+        <video id="video-player" playsinline muted></video>
+        {% if is_admin %}
+        <div id="admin-controls" class="forced-visible">
+            <div class="controls-top">
+                <button id="play-pause-btn">▶️</button>
+                <input type="range" id="progress-bar" value="0" step="1">
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- INICIO DE LA GRAN MEJORA: Usamos el parcial del chat -->
+{% set room_type = 'watch_room' %}
+{% include "partials/_chat_ui.html" %}
+<!-- FIN DE LA GRAN MEJORA -->
+
+
+<div class="overlay" id="unmute-overlay"><h2>Haz clic para activar el sonido</h2></div>
+<div class="overlay hidden" id="countdown-overlay"><h2><span id="countdown-timer">5</span></h2></div>
+{% endblock %}
+
+{% block scripts %}
+<!-- INICIO DE LA GRAN MEJORA: cargamos el script de chat central -->
+<script src="{{ url_for('static', filename='js/chat_logic.js') }}"></script>
+<!-- FIN DE LA GRAN MEJORA -->
+
+<script>
+// Este script ahora solo se encarga de la LÓGICA DEL VÍDEO
+document.addEventListener('DOMContentLoaded', () => {
+    // Esperamos a que el socket del chat_logic esté listo
+    const socketCheckInterval = setInterval(() => {
+        if (window.chatApp && window.chatApp.socket) {
+            clearInterval(socketCheckInterval);
+            setupVideoPlayer(window.chatApp.socket);
+        }
+    }, 100);
+
+    function setupVideoPlayer(socket) {
+        const sessionId = "{{ session_id }}";
+        const isAdmin = {{ is_admin | tojson }};
+
+        const elements = {
+            video: document.getElementById('video-player'),
+            unmuteOverlay: document.getElementById('unmute-overlay'),
+            countdownOverlay: document.getElementById('countdown-overlay'),
+            countdownTimer: document.getElementById('countdown-timer'),
+            adminControls: document.getElementById('admin-controls'),
+            playPauseBtn: document.getElementById('play-pause-btn'),
+            progressBar: document.getElementById('progress-bar')
+        };
+        let playlist = [], isSeeking = false;
+
+        function applyState(state, forceSrc = false) {
+            if (!state || !playlist || playlist.length === 0) return;
+            const currentVideoData = playlist[state.current_video_index];
+            if (!currentVideoData) return;
+
+            if (forceSrc || !elements.video.src.endsWith(currentVideoData.src)) {
+                elements.video.src = `/static/${currentVideoData.src}`;
+                if (elements.progressBar) elements.progressBar.max = currentVideoData.duration || 3600;
+            }
+            if (Math.abs(elements.video.currentTime - state.time) > 2.5) {
+                elements.video.currentTime = state.time;
+            }
+            if (state.playing && elements.video.paused) {
+                elements.video.play().catch(e => {});
+            } else if (!state.playing && !elements.video.paused) {
+                elements.video.pause();
+            }
+            if (isAdmin && elements.playPauseBtn && elements.progressBar) {
+                elements.playPauseBtn.textContent = state.playing ? '⏸️' : '▶️';
+                if (!isSeeking) elements.progressBar.value = state.time;
+            }
+        }
+
+        elements.unmuteOverlay.addEventListener('click', () => {
+            elements.video.muted = false;
+            elements.unmuteOverlay.classList.add('hidden');
+        });
+        elements.video.addEventListener('click', () => {
+            if(!elements.unmuteOverlay.classList.contains('hidden')) {
+                elements.video.muted = false;
+                elements.unmuteOverlay.classList.add('hidden');
+            }
+        });
+
+        if (isAdmin && elements.playPauseBtn && elements.progressBar) {
+            elements.playPauseBtn.addEventListener('click', () => socket.emit('admin_action', { session_id: sessionId, action: 'state_change', state: { playing: elements.video.paused, time: elements.video.currentTime }}));
+            elements.progressBar.addEventListener('input', () => isSeeking = true);
+            elements.progressBar.addEventListener('change', () => {
+                isSeeking = false;
+                socket.emit('admin_action', { session_id: sessionId, action: 'state_change', state: { time: parseFloat(elements.progressBar.value) }});
+            });
+        }
+        
+        elements.video.addEventListener('stalled', () => socket.emit('request_state_sync', { session_id: sessionId }));
+        elements.video.addEventListener('error', () => setTimeout(() => socket.emit('request_state_sync', { session_id: sessionId }), 1000));
+
+        // Los listeners de chat ya no están aquí
+        socket.on('initial_state', (data) => {
+            playlist = data.playlist;
+            if (data.state.status === 'active') {
+                applyState(data.state, true);
+            }
+        });
+        socket.on('state_change', (state) => applyState(state));
+        socket.on('sync_pulse', (data) => { if (!isSeeking && !elements.video.paused && Math.abs(data.time - elements.video.currentTime) > 2.5) { elements.video.currentTime = data.time; } if (isAdmin && elements.progressBar && !isSeeking) { elements.progressBar.value = data.time; }});
+        socket.on('play_next_video', (data) => applyState(data.state, true));
+        socket.on('playback_starting', (data) => {
+            elements.countdownOverlay.classList.remove('hidden');
+            let count = data.countdown;
+            elements.countdownTimer.textContent = count;
+            const interval = setInterval(() => {
+                count--;
+                elements.countdownTimer.textContent = count > 0 ? count : '¡Disfruta!';
+                if (count <= 0) { clearInterval(interval); setTimeout(() => elements.countdownOverlay.classList.add('hidden'), 1000); }
+            }, 1000);
+        });
+    }
+});
+</script>
+{% endblock %}

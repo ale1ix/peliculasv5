@@ -1,0 +1,106 @@
+{% extends "layout.html" %}
+
+{% block title %}Admin Panel{% endblock %}
+
+{% block head_styles %}
+<style>
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; flex-wrap: wrap; gap: 10px; }
+    .grid-layout { display: grid; grid-template-columns: 1fr; gap: 40px; }
+    @media (min-width: 992px) { .grid-layout { grid-template-columns: 1fr 2fr; } }
+    .session-card { display: flex; gap: 20px; align-items: flex-start; border-left: 4px solid; margin-bottom: 15px; }
+    .poster-thumb { width: 80px; height: 120px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background-color: #333; }
+    .session-info p { margin: 5px 0; font-size: 0.9em; }
+    .status-scheduled { border-color: var(--text-secondary); }
+    .status-vestibule { border-color: var(--warning); }
+    .status-active { border-color: var(--success); }
+    .status-finished { border-color: var(--danger); opacity: 0.6; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header">
+        <h1>Panel de Control</h1>
+        <a href="{{ url_for('logout') }}" class="btn btn-secondary">Cerrar Sesión</a>
+    </div>
+    <div class="grid-layout">
+        <aside>
+            <!-- Formulario de Subida -->
+            <div class="card" style="margin-bottom: 20px;">
+                <h2>Subir Película</h2>
+                <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
+                    <div class="form-group"><label>Archivo de Vídeo:</label><input type="file" name="movie_file" accept="video/*" required></div>
+                    <div class="form-group"><label>Archivo de Póster:</label><input type="file" name="poster_file" accept="image/*" required></div>
+                    <button type="submit" class="btn" style="width:100%;">Subir Paquete</button>
+                </form>
+            </div>
+            <!-- Formulario de Programación -->
+            <div class="card">
+                <h2>Programar Sesión</h2>
+                <form action="{{ url_for('schedule_session') }}" method="post">
+                    <div class="form-group">
+                        <label for="movie-select">Película:</label>
+                        <select name="movie_title" id="movie-select" required>
+                            {% for title, file in movies.items() %}
+                                <option value="{{ title }}">{{ title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="time-select">Fecha y Hora:</label>
+                        <input type="datetime-local" name="scheduled_time" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password-input">Contraseña (opcional):</label>
+                        <input type="text" name="session_password" id="password-input" placeholder="Dejar en blanco para no usar contraseña">
+                    </div>
+
+                    <button type="submit" class="btn" style="width:100%;" {% if not movies %}disabled{% endif %}>Programar</button>
+                </form>
+            </div>
+        </aside>
+        <main>
+            <h2>Sesiones Programadas y Activas</h2>
+            <div id="session-list">
+                {% for s in sessions %}
+                <div class="card session-card status-{{ s.current_status_in_memory }}">
+                    <img class="poster-thumb" src="{{ url_for('static', filename='posters/' + s.poster_file) if s.poster_file else '' }}" alt="Póster">
+                    <div class="session-info">
+                        <h3>{{ s.movie_title }}</h3>
+                        <p><strong>Hora:</strong> {{ s.scheduled_time }}</p>
+                        <!-- Esto ahora es seguro y nunca fallará -->
+                        <p><strong>Estado:</strong> <span style="text-transform: capitalize;">{{ s.current_status_in_memory.replace('_', ' ') }}</span></p>
+                        <p>
+                            <strong>Usuarios:</strong>
+                            <span>Vestíbulo: {{ s.user_count_vestibule }}</span> |
+                            <span>Sala: {{ s.user_count_watch_room }}</span>
+                        </p>
+                        <div class="actions">
+                            {% if s.status != 'finished' %}
+                                <a href="{{ url_for('vestibulo', session_id=s.id) }}" target="_blank" class="btn btn-secondary btn-small">Vestíbulo</a>
+                                <a href="{{ url_for('watch_room', session_id=s.id) }}" target="_blank" class="btn btn-small">Cabina</a>
+                            {% endif %}
+                            <form action="{{ url_for('delete_session', session_id=s.id) }}" method="post" onsubmit="return confirm('¿Borrar esta sesión?');" style="margin:0;">
+                                <button type="submit" class="btn btn-danger btn-small">Borrar</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <p>No hay sesiones programadas.</p>
+                {% endfor %}
+            </div>
+        </main>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const socket = io();
+    // Recargar el panel de admin si hay cambios en las sesiones
+    socket.on('admin_panel_update', () => location.reload());
+</script>
+{% endblock %}

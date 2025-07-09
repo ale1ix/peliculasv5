@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+
+{% block title %}Cartelera{% endblock %}
+
+{% block head_styles %}
+<style>
+    .header { text-align: center; margin-bottom: 50px; }
+    .header h1 { font-size: 3.5em; letter-spacing: -2px; margin-bottom: 0; background: var(--accent-gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header p { font-size: 1.2em; color: var(--text-secondary); }
+    .sessions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 30px; }
+    .movie-card { background-color: var(--bg-medium); border-radius: 8px; overflow: hidden; transition: all 0.3s ease; display: flex; flex-direction: column; position: relative; }
+    .movie-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(0,0,0,0.4); }
+    .poster-wrapper { position: relative; width: 100%; padding-top: 150%; background-color: var(--bg-light); }
+    .poster-image { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+    .status-badge { position: absolute; top: 10px; right: 10px; padding: 5px 10px; border-radius: 15px; font-size: 0.8em; font-weight: bold; backdrop-filter: blur(5px); background-color: rgba(0,0,0,0.5); }
+    .status-active { color: var(--success); border: 1px solid var(--success); }
+    .status-vestibule { color: var(--warning); border: 1px solid var(--warning); animation: pulse 1.8s infinite; }
+    .status-scheduled { color: var(--text-secondary); border: 1px solid var(--text-secondary); }
+    .card-content { padding: 20px; flex-grow: 1; display: flex; flex-direction: column; }
+    .card-content h2 { font-size: 1.4em; margin-bottom: 10px; }
+    .card-content p { color: var(--text-secondary); margin: 0; font-size: 0.9em; }
+    .card-footer { padding: 20px; border-top: 1px solid var(--border-color); }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--warning); } 70% { box-shadow: 0 0 0 10px rgba(245, 166, 35, 0); } 100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0); } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header">
+        <h1>Cartelera Cinesa</h1>
+        <p>Tu próxima experiencia cinematográfica te espera.</p>
+    </div>
+    <div class="sessions-grid">
+        {% for s in sessions %}
+            <a href="{{ url_for('password_prompt', session_id=s.id) if s.display_status != 'scheduled' else '#' }}" class="movie-card" {% if s.display_status == 'scheduled' %}style="cursor:not-allowed;" aria-disabled="true" onclick="return false;"{% endif %}>
+                <div class="poster-wrapper">
+                    <img class="poster-image" src="{{ url_for('static', filename='posters/' + s.poster_file) if s.poster_file else '' }}" alt="Póster de {{ s.movie_title }}">
+                    <span class="status-badge status-{{ s.display_status }}">
+                        {{ 'En Directo' if s.display_status == 'active' else 'Vestíbulo Abierto' if s.display_status == 'vestibule' else 'Próximamente' }}
+                    </span>
+                </div>
+                <div class="card-content">
+                    <h2>{{ s.movie_title }}</h2>
+                    <p>{{ s.scheduled_time_obj.strftime('%A, %d de %B') }}</p>
+                    <p><strong>{{ s.scheduled_time_obj.strftime('%H:%M') }}h</strong></p>
+                </div>
+                <div class="card-footer">
+                    <button class="btn" style="width:100%" {% if s.display_status == 'scheduled' %}disabled{% endif %}>
+                        {{ 'Entrar a la Sala' if s.display_status == 'active' else 'Entrar al Vestíbulo' if s.display_status == 'vestibule' else 'No disponible' }}
+                    </button>
+                </div>
+            </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

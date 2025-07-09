@@ -1,0 +1,97 @@
+{
+    "phase": 1,
+    "app_locked": false,
+    "global_message": "",
+    "category_config": [
+        {
+            "id": "mejor_policia",
+            "title": "Mejor Policía",
+            "is_active": true
+        },
+        {
+            "id": "mejor_sanitario",
+            "title": "Mejor Sanitario",
+            "is_active": true
+        },
+        {
+            "id": "mejor_bombero",
+            "title": "Mejor Bombero",
+            "is_active": true
+        },
+        {
+            "id": "mejor_dt",
+            "title": "Mejor DT",
+            "is_active": true
+        },
+        {
+            "id": "mejor_empresa",
+            "title": "Mejor Empresa",
+            "is_active": true
+        },
+        {
+            "id": "mejor_evento",
+            "title": "Mejor Evento",
+            "is_active": true
+        }
+    ],
+    "nominations": {
+        "mejor_policia": {
+            "klkmanin": 3,
+            "pepe anal (tuculogordo)": 3
+        },
+        "mejor_sanitario": {
+            "juanito lopez (golondrina)": 2
+        },
+        "mejor_bombero": {
+            "quevedo lopez gutierrez": 3
+        },
+        "mejor_dt": {},
+        "mejor_empresa": {},
+        "mejor_evento": {}
+    },
+    "finalists": {
+        "mejor_policia": [],
+        "mejor_sanitario": [],
+        "mejor_bombero": [],
+        "mejor_dt": [],
+        "mejor_empresa": [],
+        "mejor_evento": []
+    },
+    "votes": {
+        "mejor_policia": {},
+        "mejor_sanitario": {},
+        "mejor_bombero": {},
+        "mejor_dt": {},
+        "mejor_empresa": {},
+        "mejor_evento": {}
+    },
+    "merge_log": {
+        "juanito lopez": "juanito lopez (golondrina)",
+        "quevedo": "quevedo lopez gutierrez",
+        "quevedo lopez (onichan12)": "quevedo lopez gutierrez",
+        "fd": "klkmanin",
+        "aa": "klkmanin",
+        "hfjfg": "klkmanin",
+        "dsf": "klkmanin",
+        "pepe": "pepe anal (tuculogordo)",
+        "pepe anal": "pepe anal (tuculogordo)"
+    },
+    "user_actions": {
+        "nominations_by_ip": {
+            "mejor_policia": [],
+            "mejor_sanitario": [],
+            "mejor_bombero": [],
+            "mejor_dt": [],
+            "mejor_empresa": [],
+            "mejor_evento": []
+        },
+        "votes_by_ip": {
+            "mejor_policia": [],
+            "mejor_sanitario": [],
+            "mejor_bombero": [],
+            "mejor_dt": [],
+            "mejor_empresa": [],
+            "mejor_evento": []
+        }
+    }
+}
